@@ -415,7 +415,10 @@ function AdminPanel({ config, setConfig, history, onSave, onLogout, onResetPhone
           <div className="flex flex-col gap-2">
             {history.map((h, i) => (
               <div key={i} style={{ background: "#fff" }} className="flex items-center justify-between p-2.5 rounded-xl text-xs gap-2">
-                <span style={{ color: C.ink }} className="font-semibold truncate max-w-[90px]">{h.name || "Sin nombre"}</span>
+                <div className="flex flex-col shrink-0 max-w-[110px]">
+                  <span style={{ color: C.ink }} className="font-semibold truncate">{h.name || "Sin nombre"}</span>
+                  <span style={{ color: C.inkSoft }} className="text-[10px]">{h.phone}</span>
+                </div>
                 <span style={{ color: C.inkSoft }} className="shrink-0">{new Date(h.date).toLocaleDateString()}</span>
                 <span style={{ color: h.won ? C.mint : C.inkSoft }} className="font-bold text-right shrink-0">
                   {h.won ? "🎁 " : ""}{h.result}
