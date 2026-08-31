@@ -48,3 +48,4 @@ create policy "anon puede borrar participations" on participations for delete us
 
 create policy "anon puede leer history" on history for select using (true);
 create policy "anon puede escribir history" on history for insert with check (true);
+create policy "anon puede borrar history" on history for delete using (true);
