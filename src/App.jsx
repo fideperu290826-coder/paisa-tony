@@ -3,7 +3,7 @@ import { QRCodeSVG } from "qrcode.react";
 import {
   Lock, CheckCircle2, RotateCcw, Settings,
   ArrowRight, Phone, UtensilsCrossed, Sparkles, LogOut,
-  ShieldCheck, Clock, Save, Eye, EyeOff
+  ShieldCheck, Clock, Save, Eye, EyeOff, MessageCircle
 } from "lucide-react";
 import {
   getConfig, setConfig as saveConfigRemote,
@@ -49,6 +49,13 @@ const DEFAULT_CONFIG = {
     { isPrize: false, name: "La próxima, con suerte", emoji: "🍀" },
   ],
   adminPassword: "1234",
+  whatsappCommunityLink: "",
+  whatsappCommunityPerks: [
+    "Ve el menú del día antes que nadie",
+    "Pide tu delivery directo por WhatsApp",
+    "Encarga tu pedido y recógelo listo",
+  ],
+  whatsappMessageTemplate: "¡Hola {nombre}! Te escribimos de El Paisa - Tony 🍽️ Tenemos algo especial para ti, ¿tienes un momento?",
 };
 
 function cleanPhone(v) {
@@ -260,7 +267,7 @@ function Game({ onFinish, prizeCount }) {
   );
 }
 
-function Result({ prize, onDone }) {
+function Result({ prize, onDone, communityLink, perks = [] }) {
   const won = prize?.isPrize;
   return (
     <Screen>
@@ -268,8 +275,37 @@ function Result({ prize, onDone }) {
         {prize?.emoji || "🍀"}
       </div>
       <h2 style={{ color: C.cream }} className="text-2xl font-bold text-center mb-2">{won ? "¡Ganaste!" : "¡Casi!"}</h2>
-      <p style={{ color: won ? C.mint : `${C.cream}bb` }} className="text-lg font-semibold text-center mb-8">{prize?.name}</p>
+      <p style={{ color: won ? C.mint : `${C.cream}bb` }} className="text-lg font-semibold text-center mb-6">{prize?.name}</p>
       {won && <p style={{ color: `${C.cream}99` }} className="text-xs text-center mb-6">Muestra esta pantalla en el mostrador para reclamarlo</p>}
+
+      {communityLink && (
+        <div style={{ background: C.cream }} className="w-full rounded-2xl p-4 mb-3">
+          <p style={{ color: C.espressoDeep }} className="text-sm font-bold text-center mb-3">
+            🔥 Únete a nuestra comunidad y desbloquea:
+          </p>
+          <div className="flex flex-col gap-2 mb-1">
+            {perks.filter(Boolean).map((perk, i) => (
+              <div key={i} className="flex items-center gap-2">
+                <CheckCircle2 size={16} color={C.mint} className="shrink-0" />
+                <span style={{ color: C.inkSoft }} className="text-xs">{perk}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {communityLink && (
+        <a
+          href={communityLink}
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{ background: "#25D366", color: "#0b1a10" }}
+          className="w-full py-3.5 rounded-2xl font-bold flex items-center justify-center gap-2 mb-3"
+        >
+          <MessageCircle size={18} /> Únete a la comunidad de WhatsApp
+        </a>
+      )}
+
       <GhostButton onClick={onDone}><RotateCcw size={16} /> Volver al inicio</GhostButton>
     </Screen>
   );
@@ -318,6 +354,11 @@ function AdminPanel({ config, setConfig, history, onSave, onLogout, onResetPhone
   const updatePrize = (i, patch) => setConfig({ ...config, prizes: config.prizes.map((p, idx) => (idx === i ? { ...p, ...patch } : p)) });
   const updateOption = (i, patch) => setConfig({ ...config, surveyOptions: config.surveyOptions.map((o, idx) => (idx === i ? { ...o, ...patch } : o)) });
 
+  const waLinkFor = (h) => {
+    const msg = (config.whatsappMessageTemplate || "").replace("{nombre}", h.name || "");
+    return `https://wa.me/51${h.phone}?text=${encodeURIComponent(msg)}`;
+  };
+
   return (
     <div style={{ background: C.cream, minHeight: "620px" }} className="w-full rounded-3xl p-5">
       <div className="flex items-center justify-between mb-5">
@@ -353,6 +394,34 @@ function AdminPanel({ config, setConfig, history, onSave, onLogout, onResetPhone
           </Field>
           <Field label="Contraseña de administrador">
             <input value={config.adminPassword} onChange={(e) => setConfig({ ...config, adminPassword: e.target.value })} style={inputStyle} className="w-full py-2.5 px-3 rounded-xl outline-none" />
+          </Field>
+          <Field label="Link de tu comunidad de WhatsApp (opcional)">
+            <input value={config.whatsappCommunityLink} onChange={(e) => setConfig({ ...config, whatsappCommunityLink: e.target.value })} placeholder="https://chat.whatsapp.com/xxxxxxxx" style={inputStyle} className="w-full py-2.5 px-3 rounded-xl outline-none" />
+            <p style={{ color: C.inkSoft }} className="text-xs mt-1">
+              Si lo dejas vacío, no se muestra el botón de "Únete a la comunidad" al final del juego.
+            </p>
+          </Field>
+          <Field label="Beneficios de unirse (aparecen como lista antes del botón)">
+            {[0, 1, 2].map((i) => (
+              <input
+                key={i}
+                value={config.whatsappCommunityPerks?.[i] || ""}
+                onChange={(e) => {
+                  const perks = [...(config.whatsappCommunityPerks || ["", "", ""])];
+                  perks[i] = e.target.value;
+                  setConfig({ ...config, whatsappCommunityPerks: perks });
+                }}
+                placeholder={`Beneficio ${i + 1}`}
+                style={inputStyle}
+                className="w-full py-2.5 px-3 rounded-xl outline-none mb-2"
+              />
+            ))}
+          </Field>
+          <Field label="Mensaje rápido para WhatsApp individual">
+            <textarea value={config.whatsappMessageTemplate} onChange={(e) => setConfig({ ...config, whatsappMessageTemplate: e.target.value })} rows={3} style={inputStyle} className="w-full py-2.5 px-3 rounded-xl outline-none resize-none" />
+            <p style={{ color: C.inkSoft }} className="text-xs mt-1">
+              Usa <b>{"{nombre}"}</b> y se reemplaza automático por el nombre de cada persona.
+            </p>
           </Field>
         </div>
       )}
@@ -415,14 +484,24 @@ function AdminPanel({ config, setConfig, history, onSave, onLogout, onResetPhone
           <div className="flex flex-col gap-2">
             {history.map((h, i) => (
               <div key={i} style={{ background: "#fff" }} className="flex items-center justify-between p-2.5 rounded-xl text-xs gap-2">
-                <div className="flex flex-col shrink-0 max-w-[110px]">
+                <div className="flex flex-col shrink-0 max-w-[90px]">
                   <span style={{ color: C.ink }} className="font-semibold truncate">{h.name || "Sin nombre"}</span>
                   <span style={{ color: C.inkSoft }} className="text-[10px]">{h.phone}</span>
                 </div>
                 <span style={{ color: C.inkSoft }} className="shrink-0">{new Date(h.date).toLocaleDateString()}</span>
-                <span style={{ color: h.won ? C.mint : C.inkSoft }} className="font-bold text-right shrink-0">
+                <span style={{ color: h.won ? C.mint : C.inkSoft }} className="font-bold text-right shrink-0 flex-1 truncate px-1">
                   {h.won ? "🎁 " : ""}{h.result}
                 </span>
+                <a
+                  href={waLinkFor(h)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ background: "#25D366" }}
+                  className="shrink-0 w-7 h-7 rounded-full flex items-center justify-center"
+                  title="Enviarle un WhatsApp"
+                >
+                  <MessageCircle size={14} color="#0b1a10" />
+                </a>
               </div>
             ))}
           </div>
@@ -523,7 +602,7 @@ export default function App() {
       {route === "terms" && <Terms config={config} onAccept={() => setRoute("survey")} />}
       {route === "survey" && <Survey config={config} onAnswer={(ans) => { setSurveyAnswer(ans); setRoute("game"); }} />}
       {route === "game" && <Game onFinish={finishGame} prizeCount={config.prizes.length} />}
-      {route === "result" && <Result prize={prizeResult} onDone={resetAll} />}
+      {route === "result" && <Result prize={prizeResult} onDone={resetAll} communityLink={config.whatsappCommunityLink} perks={config.whatsappCommunityPerks} />}
       {route === "adminLogin" && <AdminLogin config={config} onOk={() => { loadHistory(); setRoute("admin"); }} onBack={() => setRoute("landing")} />}
       {route === "admin" && (
         <AdminPanel config={config} setConfig={setConfig} history={history} saving={saving}
