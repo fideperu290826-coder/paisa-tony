@@ -3,12 +3,13 @@ import { QRCodeSVG } from "qrcode.react";
 import {
   Lock, CheckCircle2, RotateCcw, Settings,
   ArrowRight, Phone, UtensilsCrossed, Sparkles, LogOut,
-  ShieldCheck, Clock, Save, Eye, EyeOff, MessageCircle
+  ShieldCheck, Clock, Save, Eye, EyeOff, MessageCircle,
+  Plus, Trash2, BarChart3, Repeat, Trophy
 } from "lucide-react";
 import {
   getConfig, setConfig as saveConfigRemote,
   getParticipation, setParticipation, deleteParticipation,
-  getHistory, addHistoryEntry,
+  getHistory, getFullHistory, addHistoryEntry,
 } from "./storage";
 
 /* ---------- Palette ---------- */
@@ -244,23 +245,22 @@ function Survey({ config, onAnswer }) {
 const WHEEL_SIZE = 270;
 const WHEEL_CENTER = WHEEL_SIZE / 2;
 const LABEL_RADIUS = 100;
-const SEGMENT_DEG = 36; // 360 / 10
 
-function segmentLabelPos(index) {
-  const angleDeg = index * SEGMENT_DEG + SEGMENT_DEG / 2;
-  const angleRad = ((angleDeg - 90) * Math.PI) / 180; // -90 so 0deg (segment 0 center) points up like conic-gradient
+function segmentLabelPos(index, segmentDeg) {
+  const angleDeg = index * segmentDeg + segmentDeg / 2;
+  const angleRad = ((angleDeg - 90) * Math.PI) / 180;
   return {
     x: WHEEL_CENTER + LABEL_RADIUS * Math.cos(angleRad),
     y: WHEEL_CENTER + LABEL_RADIUS * Math.sin(angleRad),
   };
 }
 
-function buildWheelGradient(count) {
+function buildWheelGradient(count, segmentDeg) {
   const colors = [C.creamSoft, C.cream];
   const stops = [];
   for (let i = 0; i < count; i++) {
     const color = colors[i % 2];
-    stops.push(`${color} ${i * SEGMENT_DEG}deg ${(i + 1) * SEGMENT_DEG}deg`);
+    stops.push(`${color} ${i * segmentDeg}deg ${(i + 1) * segmentDeg}deg`);
   }
   return `conic-gradient(${stops.join(", ")})`;
 }
@@ -269,11 +269,12 @@ function Game({ onFinish, prizes }) {
   const [spinning, setSpinning] = useState(false);
   const [rotation, setRotation] = useState(0);
   const [prizeIdx] = useState(() => weightedPrizeIndex(prizes.length));
+  const segmentDeg = 360 / prizes.length;
 
   const play = () => {
     if (spinning) return;
     setSpinning(true);
-    const targetCenterDeg = prizeIdx * SEGMENT_DEG + SEGMENT_DEG / 2;
+    const targetCenterDeg = prizeIdx * segmentDeg + segmentDeg / 2;
     const fullSpins = 6;
     const finalRotation = fullSpins * 360 + (360 - targetCenterDeg);
     setRotation(finalRotation);
@@ -303,7 +304,7 @@ function Game({ onFinish, prizes }) {
           style={{
             width: WHEEL_SIZE,
             height: WHEEL_SIZE,
-            background: buildWheelGradient(prizes.length),
+            background: buildWheelGradient(prizes.length, segmentDeg),
             border: `5px solid ${C.espressoDeep}`,
             transform: `rotate(${rotation}deg)`,
             transition: spinning ? "transform 4.2s cubic-bezier(0.15, 0.65, 0.15, 1)" : "none",
@@ -311,7 +312,7 @@ function Game({ onFinish, prizes }) {
           className="rounded-full relative"
         >
           {prizes.map((p, i) => {
-            const { x, y } = segmentLabelPos(i);
+            const { x, y } = segmentLabelPos(i, segmentDeg);
             return (
               <div
                 key={i}
@@ -380,6 +381,63 @@ function Result({ prize, onDone, communityLink, perks = [] }) {
   );
 }
 
+function computeDashboard(fullHistory) {
+  const sorted = [...fullHistory].sort((a, b) => new Date(a.date) - new Date(b.date));
+  const roundsMap = new Map();
+  for (const h of sorted) {
+    const q = h.surveyQuestion || h.survey;
+    if (!q) continue;
+    if (!roundsMap.has(q)) roundsMap.set(q, { question: q, entries: [], firstDate: h.date, lastDate: h.date });
+    const r = roundsMap.get(q);
+    r.entries.push(h);
+    r.lastDate = h.date;
+  }
+  const rounds = Array.from(roundsMap.values())
+    .map((r, idx) => {
+      const tally = {};
+      for (const e of r.entries) {
+        const ans = e.surveyAnswer || e.survey || "Sin respuesta";
+        tally[ans] = (tally[ans] || 0) + 1;
+      }
+      const results = Object.entries(tally).sort((a, b) => b[1] - a[1]);
+      return {
+        roundNumber: idx + 1,
+        question: r.question,
+        total: r.entries.length,
+        firstDate: r.firstDate,
+        lastDate: r.lastDate,
+        results,
+        winner: results[0] ? results[0][0] : null,
+      };
+    })
+    .reverse();
+
+  const byPhone = new Map();
+  for (const h of fullHistory) {
+    if (!h.phone) continue;
+    if (!byPhone.has(h.phone)) {
+      byPhone.set(h.phone, { phone: h.phone, name: h.name, count: 0, wins: 0, lastDate: h.date, firstDate: h.date });
+    }
+    const p = byPhone.get(h.phone);
+    p.count += 1;
+    if (h.won) p.wins += 1;
+    if (new Date(h.date) > new Date(p.lastDate)) p.lastDate = h.date;
+    if (new Date(h.date) < new Date(p.firstDate)) p.firstDate = h.date;
+    if (h.name) p.name = h.name;
+  }
+  const recurring = Array.from(byPhone.values())
+    .filter((p) => p.count >= 2)
+    .sort((a, b) => b.count - a.count);
+
+  return {
+    totalPlays: fullHistory.length,
+    uniqueCustomers: byPhone.size,
+    totalWins: fullHistory.filter((h) => h.won).length,
+    rounds,
+    recurring,
+  };
+}
+
 /* ================= ADMIN ================= */
 function AdminLogin({ config, onOk, onBack }) {
   const [pw, setPw] = useState("");
@@ -419,9 +477,32 @@ function AdminPanel({ config, setConfig, history, onSave, onLogout, onResetPhone
   const [tab, setTab] = useState("general");
   const [resetPhone, setResetPhone] = useState("");
   const [resetMsg, setResetMsg] = useState("");
+  const [dashboard, setDashboard] = useState(null);
+  const [dashboardLoading, setDashboardLoading] = useState(false);
+
+  useEffect(() => {
+    if (tab === "dashboard" && !dashboard && !dashboardLoading) {
+      setDashboardLoading(true);
+      getFullHistory().then((full) => {
+        setDashboard(computeDashboard(full));
+        setDashboardLoading(false);
+      });
+    }
+  }, [tab, dashboard, dashboardLoading]);
 
   const updatePrize = (i, patch) => setConfig({ ...config, prizes: config.prizes.map((p, idx) => (idx === i ? { ...p, ...patch } : p)) });
+  const addPrize = () => setConfig({ ...config, prizes: [...config.prizes, { isPrize: false, name: "La próxima, con suerte", emoji: "🍀" }] });
+  const removePrize = (i) => {
+    if (config.prizes.length <= 2) return;
+    setConfig({ ...config, prizes: config.prizes.filter((_, idx) => idx !== i) });
+  };
+
   const updateOption = (i, patch) => setConfig({ ...config, surveyOptions: config.surveyOptions.map((o, idx) => (idx === i ? { ...o, ...patch } : o)) });
+  const addOption = () => setConfig({ ...config, surveyOptions: [...config.surveyOptions, { label: "", emoji: "🙂" }] });
+  const removeOption = (i) => {
+    if (config.surveyOptions.length <= 2) return;
+    setConfig({ ...config, surveyOptions: config.surveyOptions.filter((_, idx) => idx !== i) });
+  };
 
   const waLinkFor = (h) => {
     const msg = (config.whatsappMessageTemplate || "").replace("{nombre}", h.name || "");
@@ -441,7 +522,7 @@ function AdminPanel({ config, setConfig, history, onSave, onLogout, onResetPhone
       </div>
 
       <div className="flex gap-2 mb-5 flex-wrap">
-        {[["general", "General"], ["encuesta", "Encuesta"], ["premios", "Premios"], ["historial", "Historial"]].map(([id, label]) => (
+        {[["general", "General"], ["encuesta", "Encuesta"], ["premios", "Premios"], ["dashboard", "Dashboard"], ["historial", "Historial"]].map(([id, label]) => (
           <button key={id} onClick={() => setTab(id)}
             style={{ background: tab === id ? C.espresso : "#fff", color: tab === id ? C.cream : C.inkSoft }}
             className="px-3.5 py-2 rounded-xl text-xs font-bold">
@@ -504,16 +585,31 @@ function AdminPanel({ config, setConfig, history, onSave, onLogout, onResetPhone
             <div key={i} className="flex gap-2 mb-3">
               <input value={opt.emoji} onChange={(e) => updateOption(i, { emoji: e.target.value })} style={inputStyle} className="w-14 py-2.5 text-center rounded-xl outline-none" />
               <input value={opt.label} onChange={(e) => updateOption(i, { label: e.target.value })} placeholder={`Opción ${i + 1}`} style={inputStyle} className="flex-1 py-2.5 px-3 rounded-xl outline-none" />
+              <button
+                onClick={() => removeOption(i)}
+                disabled={config.surveyOptions.length <= 2}
+                style={{ opacity: config.surveyOptions.length <= 2 ? 0.3 : 1 }}
+                className="w-10 shrink-0 flex items-center justify-center rounded-xl"
+              >
+                <Trash2 size={16} color={C.clay} />
+              </button>
             </div>
           ))}
+          <button
+            onClick={addOption}
+            style={{ borderColor: C.amber, color: C.amberDeep }}
+            className="w-full py-2.5 rounded-xl border-2 border-dashed text-sm font-bold flex items-center justify-center gap-1"
+          >
+            <Plus size={16} /> Agregar opción
+          </button>
         </div>
       )}
 
       {tab === "premios" && (
         <div>
           <p style={{ color: C.inkSoft }} className="text-xs mb-3">
-            La ficha <b>1</b> es la <b>menos probable</b> y la ficha <b>10</b> es la <b>más probable</b>.
-            Pon tus premios más valiosos arriba (1-3) y los mensajes de "sigue participando" abajo (8-10).
+            La ficha <b>1</b> es la <b>menos probable</b> y la última ficha (<b>{config.prizes.length}</b>) es la <b>más probable</b>.
+            Pon tus premios más valiosos arriba y los mensajes de "sigue participando" abajo. La ruleta se ajusta sola a la cantidad que dejes aquí.
           </p>
           {config.prizes.map((p, i) => (
             <div key={i} style={{ background: "#fff" }} className="flex items-center gap-2 mb-2 p-2 rounded-xl">
@@ -524,8 +620,118 @@ function AdminPanel({ config, setConfig, history, onSave, onLogout, onResetPhone
                 <input type="checkbox" checked={p.isPrize} onChange={(e) => updatePrize(i, { isPrize: e.target.checked })} />
                 Premio
               </label>
+              <button
+                onClick={() => removePrize(i)}
+                disabled={config.prizes.length <= 2}
+                style={{ opacity: config.prizes.length <= 2 ? 0.3 : 1 }}
+                className="w-8 shrink-0 flex items-center justify-center"
+              >
+                <Trash2 size={16} color={C.clay} />
+              </button>
             </div>
           ))}
+          <button
+            onClick={addPrize}
+            style={{ borderColor: C.amber, color: C.amberDeep }}
+            className="w-full py-2.5 rounded-xl border-2 border-dashed text-sm font-bold flex items-center justify-center gap-1"
+          >
+            <Plus size={16} /> Agregar ficha
+          </button>
+        </div>
+      )}
+
+      {tab === "dashboard" && (
+        <div>
+          {dashboardLoading && <p style={{ color: C.inkSoft }} className="text-sm">Calculando estadísticas...</p>}
+
+          {dashboard && (
+            <>
+              <div className="flex gap-2 mb-5">
+                <div style={{ background: "#fff" }} className="flex-1 rounded-xl p-3 text-center">
+                  <p style={{ color: C.espressoDeep }} className="text-xl font-bold">{dashboard.totalPlays}</p>
+                  <p style={{ color: C.inkSoft }} className="text-[10px] uppercase font-bold">Jugadas totales</p>
+                </div>
+                <div style={{ background: "#fff" }} className="flex-1 rounded-xl p-3 text-center">
+                  <p style={{ color: C.espressoDeep }} className="text-xl font-bold">{dashboard.uniqueCustomers}</p>
+                  <p style={{ color: C.inkSoft }} className="text-[10px] uppercase font-bold">Clientes únicos</p>
+                </div>
+                <div style={{ background: "#fff" }} className="flex-1 rounded-xl p-3 text-center">
+                  <p style={{ color: C.mint }} className="text-xl font-bold">{dashboard.totalWins}</p>
+                  <p style={{ color: C.inkSoft }} className="text-[10px] uppercase font-bold">Premios entregados</p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 mb-2">
+                <BarChart3 size={16} color={C.espressoDeep} />
+                <p style={{ color: C.espressoDeep }} className="text-sm font-bold">Resultados de encuesta por ronda</p>
+              </div>
+              <p style={{ color: C.inkSoft }} className="text-xs mb-3">
+                Cada vez que cambias la pregunta o las opciones en la pestaña "Encuesta", se abre una ronda nueva automáticamente.
+              </p>
+
+              {dashboard.rounds.length === 0 && (
+                <p style={{ color: C.inkSoft }} className="text-sm mb-4">Todavía no hay suficientes datos de encuestas.</p>
+              )}
+
+              <div className="flex flex-col gap-3 mb-6">
+                {dashboard.rounds.map((r) => (
+                  <div key={r.roundNumber} style={{ background: "#fff" }} className="rounded-xl p-3">
+                    <div className="flex items-center justify-between mb-1">
+                      <p style={{ color: C.espressoDeep }} className="text-xs font-bold">Ronda {r.roundNumber}</p>
+                      <p style={{ color: C.inkSoft }} className="text-[10px]">
+                        {new Date(r.firstDate).toLocaleDateString()} – {new Date(r.lastDate).toLocaleDateString()} · {r.total} votos
+                      </p>
+                    </div>
+                    <p style={{ color: C.ink }} className="text-sm font-semibold mb-2">{r.question}</p>
+                    <div className="flex flex-col gap-1.5">
+                      {r.results.map(([label, count]) => {
+                        const pct = r.total ? Math.round((count / r.total) * 100) : 0;
+                        const isWinner = label === r.winner;
+                        return (
+                          <div key={label}>
+                            <div className="flex items-center justify-between text-xs mb-0.5">
+                              <span style={{ color: isWinner ? C.espressoDeep : C.inkSoft, fontWeight: isWinner ? 700 : 400 }} className="flex items-center gap-1">
+                                {isWinner && <Trophy size={12} color={C.amberDeep} />} {label}
+                              </span>
+                              <span style={{ color: C.inkSoft }}>{count} ({pct}%)</span>
+                            </div>
+                            <div style={{ background: C.creamSoft }} className="w-full h-2 rounded-full overflow-hidden">
+                              <div style={{ background: isWinner ? C.amber : C.inkSoft, width: `${pct}%` }} className="h-full rounded-full" />
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="flex items-center gap-2 mb-2">
+                <Repeat size={16} color={C.espressoDeep} />
+                <p style={{ color: C.espressoDeep }} className="text-sm font-bold">Clientes recurrentes</p>
+              </div>
+              <p style={{ color: C.inkSoft }} className="text-xs mb-3">
+                Personas que ya jugaron más de una vez. Tú decides si vale la pena premiarlas aparte.
+              </p>
+              {dashboard.recurring.length === 0 && (
+                <p style={{ color: C.inkSoft }} className="text-sm">Todavía nadie ha repetido.</p>
+              )}
+              <div className="flex flex-col gap-2">
+                {dashboard.recurring.map((p) => (
+                  <div key={p.phone} style={{ background: "#fff" }} className="flex items-center justify-between p-2.5 rounded-xl text-xs">
+                    <div className="flex flex-col">
+                      <span style={{ color: C.ink }} className="font-semibold">{p.name || "Sin nombre"}</span>
+                      <span style={{ color: C.inkSoft }} className="text-[10px]">{p.phone}</span>
+                    </div>
+                    <div className="text-right">
+                      <span style={{ color: C.amberDeep }} className="font-bold">{p.count}x jugó</span>
+                      <p style={{ color: C.inkSoft }} className="text-[10px]">{p.wins} premio{p.wins !== 1 ? "s" : ""} ganado{p.wins !== 1 ? "s" : ""}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
         </div>
       )}
 
@@ -637,7 +843,9 @@ export default function App() {
     await setParticipation(phone, { lastPlayISO: nowISO, result: prize.name, name: customerName });
     await addHistoryEntry({
       phone, name: customerName, date: nowISO,
-      result: prize.name, won: prize.isPrize, survey: surveyAnswer,
+      result: prize.name, won: prize.isPrize,
+      surveyQuestion: config.surveyQuestion,
+      surveyAnswer: surveyAnswer,
     });
     setRoute("result");
   };

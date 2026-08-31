@@ -61,6 +61,20 @@ export async function getHistory() {
   return (data || []).map((row) => row.data);
 }
 
+/* Historial completo (hasta 2000 registros) para el dashboard de analíticas */
+export async function getFullHistory() {
+  const { data, error } = await supabase
+    .from("history")
+    .select("data")
+    .order("created_at", { ascending: false })
+    .limit(2000);
+  if (error) {
+    console.error("getFullHistory error", error);
+    return [];
+  }
+  return (data || []).map((row) => row.data);
+}
+
 export async function addHistoryEntry(entry) {
   const { error } = await supabase.from("history").insert({ data: entry });
   if (error) console.error("addHistoryEntry error", error);
