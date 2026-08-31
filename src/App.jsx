@@ -241,27 +241,96 @@ function Survey({ config, onAnswer }) {
   );
 }
 
-function Game({ onFinish, prizeCount }) {
-  const [phase, setPhase] = useState("idle");
-  const [prizeIdx] = useState(() => weightedPrizeIndex(prizeCount));
-  const play = () => {
-    setPhase("dropping");
-    setTimeout(() => setPhase("cracking"), 1100);
-    setTimeout(() => { setPhase("done"); onFinish(prizeIdx); }, 1900);
+const WHEEL_SIZE = 270;
+const WHEEL_CENTER = WHEEL_SIZE / 2;
+const LABEL_RADIUS = 100;
+const SEGMENT_DEG = 36; // 360 / 10
+
+function segmentLabelPos(index) {
+  const angleDeg = index * SEGMENT_DEG + SEGMENT_DEG / 2;
+  const angleRad = ((angleDeg - 90) * Math.PI) / 180; // -90 so 0deg (segment 0 center) points up like conic-gradient
+  return {
+    x: WHEEL_CENTER + LABEL_RADIUS * Math.cos(angleRad),
+    y: WHEEL_CENTER + LABEL_RADIUS * Math.sin(angleRad),
   };
+}
+
+function buildWheelGradient(count) {
+  const colors = [C.creamSoft, C.cream];
+  const stops = [];
+  for (let i = 0; i < count; i++) {
+    const color = colors[i % 2];
+    stops.push(`${color} ${i * SEGMENT_DEG}deg ${(i + 1) * SEGMENT_DEG}deg`);
+  }
+  return `conic-gradient(${stops.join(", ")})`;
+}
+
+function Game({ onFinish, prizes }) {
+  const [spinning, setSpinning] = useState(false);
+  const [rotation, setRotation] = useState(0);
+  const [prizeIdx] = useState(() => weightedPrizeIndex(prizes.length));
+
+  const play = () => {
+    if (spinning) return;
+    setSpinning(true);
+    const targetCenterDeg = prizeIdx * SEGMENT_DEG + SEGMENT_DEG / 2;
+    const fullSpins = 6;
+    const finalRotation = fullSpins * 360 + (360 - targetCenterDeg);
+    setRotation(finalRotation);
+    setTimeout(() => onFinish(prizeIdx), 4200);
+  };
+
   return (
     <Screen>
       <Eyebrow>¡Última parada!</Eyebrow>
-      <h2 style={{ color: C.cream }} className="text-2xl font-bold text-center mt-2 mb-6">Gira la máquina de la suerte</h2>
-      <div style={{ background: C.cream, height: "230px" }} className="w-full rounded-3xl relative overflow-hidden flex items-end justify-center mb-6">
-        <div style={{ background: C.espresso, width: "56px", height: "150px", top: "10px" }} className="absolute left-1/2 -translate-x-1/2 rounded-b-full" />
-        <div style={{ fontSize: "40px", transition: "top 1.1s cubic-bezier(.4,0,.2,1), transform 0.4s", top: phase === "idle" ? "20px" : "170px", transform: phase === "cracking" || phase === "done" ? "scale(1.5)" : "scale(1)" }} className="absolute left-1/2 -translate-x-1/2">
-          {phase === "cracking" || phase === "done" ? "✨" : "🔮"}
+      <h2 style={{ color: C.cream }} className="text-2xl font-bold text-center mt-2 mb-6">
+        Gira la ruleta de la suerte
+      </h2>
+
+      <div style={{ width: WHEEL_SIZE, height: WHEEL_SIZE }} className="relative mb-6">
+        {/* pointer, fixed, does not rotate */}
+        <div
+          style={{
+            borderLeft: "12px solid transparent",
+            borderRight: "12px solid transparent",
+            borderTop: `18px solid ${C.clay}`,
+            top: "-6px",
+          }}
+          className="absolute left-1/2 -translate-x-1/2 z-10"
+        />
+        {/* wheel */}
+        <div
+          style={{
+            width: WHEEL_SIZE,
+            height: WHEEL_SIZE,
+            background: buildWheelGradient(prizes.length),
+            border: `5px solid ${C.espressoDeep}`,
+            transform: `rotate(${rotation}deg)`,
+            transition: spinning ? "transform 4.2s cubic-bezier(0.15, 0.65, 0.15, 1)" : "none",
+          }}
+          className="rounded-full relative"
+        >
+          {prizes.map((p, i) => {
+            const { x, y } = segmentLabelPos(i);
+            return (
+              <div
+                key={i}
+                style={{ left: x, top: y, fontSize: "22px" }}
+                className="absolute -translate-x-1/2 -translate-y-1/2"
+              >
+                {p.emoji}
+              </div>
+            );
+          })}
+          <div
+            style={{ background: C.espressoDeep, width: 22, height: 22 }}
+            className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full"
+          />
         </div>
-        {phase === "idle" && <p style={{ color: C.inkSoft }} className="text-xs mb-4 relative">Presiona el botón para soltar tu ficha</p>}
       </div>
-      <PrimaryButton disabled={phase !== "idle"} onClick={play}>
-        {phase === "idle" ? "Soltar ficha" : "Girando..."} <Sparkles size={18} />
+
+      <PrimaryButton disabled={spinning} onClick={play}>
+        {spinning ? "Girando..." : "Girar la ruleta"} <Sparkles size={18} />
       </PrimaryButton>
     </Screen>
   );
@@ -601,7 +670,7 @@ export default function App() {
       {route === "blocked" && <Blocked lastPlayISO={lastPlayISO} onBack={resetAll} />}
       {route === "terms" && <Terms config={config} onAccept={() => setRoute("survey")} />}
       {route === "survey" && <Survey config={config} onAnswer={(ans) => { setSurveyAnswer(ans); setRoute("game"); }} />}
-      {route === "game" && <Game onFinish={finishGame} prizeCount={config.prizes.length} />}
+      {route === "game" && <Game onFinish={finishGame} prizes={config.prizes} />}
       {route === "result" && <Result prize={prizeResult} onDone={resetAll} communityLink={config.whatsappCommunityLink} perks={config.whatsappCommunityPerks} />}
       {route === "adminLogin" && <AdminLogin config={config} onOk={() => { loadHistory(); setRoute("admin"); }} onBack={() => setRoute("landing")} />}
       {route === "admin" && (
