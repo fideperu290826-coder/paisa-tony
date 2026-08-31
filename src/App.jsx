@@ -1,15 +1,17 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { QRCodeSVG } from "qrcode.react";
+import * as XLSX from "xlsx";
 import {
   Lock, CheckCircle2, RotateCcw, Settings,
   ArrowRight, Phone, UtensilsCrossed, Sparkles, LogOut,
   ShieldCheck, Clock, Save, Eye, EyeOff, MessageCircle,
-  Plus, Trash2, BarChart3, Repeat, Trophy
+  Plus, Trash2, BarChart3, Repeat, Trophy, Download,
+  TrendingUp, TrendingDown, AlertTriangle
 } from "lucide-react";
 import {
   getConfig, setConfig as saveConfigRemote,
   getParticipation, setParticipation, deleteParticipation,
-  getHistory, getFullHistory, addHistoryEntry,
+  getHistory, getFullHistory, addHistoryEntry, deleteRoundHistory,
 } from "./storage";
 
 /* ---------- Palette ---------- */
@@ -381,7 +383,8 @@ function Result({ prize, onDone, communityLink, perks = [] }) {
   );
 }
 
-function computeDashboard(fullHistory) {
+function computeDashboard(fullHistory, hiddenRounds = []) {
+  const hiddenSet = new Set(hiddenRounds);
   const sorted = [...fullHistory].sort((a, b) => new Date(a.date) - new Date(b.date));
   const roundsMap = new Map();
   for (const h of sorted) {
@@ -392,28 +395,57 @@ function computeDashboard(fullHistory) {
     r.entries.push(h);
     r.lastDate = h.date;
   }
-  const rounds = Array.from(roundsMap.values())
-    .map((r, idx) => {
-      const tally = {};
-      for (const e of r.entries) {
-        const ans = e.surveyAnswer || e.survey || "Sin respuesta";
-        tally[ans] = (tally[ans] || 0) + 1;
-      }
-      const results = Object.entries(tally).sort((a, b) => b[1] - a[1]);
-      return {
-        roundNumber: idx + 1,
-        question: r.question,
-        total: r.entries.length,
-        firstDate: r.firstDate,
-        lastDate: r.lastDate,
-        results,
-        winner: results[0] ? results[0][0] : null,
-      };
+
+  const allRounds = Array.from(roundsMap.values()).map((r, idx) => {
+    const tally = {};
+    for (const e of r.entries) {
+      const ans = e.surveyAnswer || e.survey || "Sin respuesta";
+      tally[ans] = (tally[ans] || 0) + 1;
+    }
+    const results = Object.entries(tally).sort((a, b) => b[1] - a[1]);
+    return {
+      roundNumber: idx + 1,
+      question: r.question,
+      total: r.entries.length,
+      firstDate: r.firstDate,
+      lastDate: r.lastDate,
+      results,
+      winner: results[0] ? results[0][0] : null,
+      hidden: hiddenSet.has(r.question),
+    };
+  });
+
+  const visibleRounds = allRounds.filter((r) => !r.hidden).slice().reverse();
+  const hiddenRoundsList = allRounds.filter((r) => r.hidden).slice().reverse();
+
+  // Tendencias: para cada opción que aparece en 2+ rondas visibles, comparamos su % a lo largo del tiempo
+  const trendMap = new Map();
+  for (const r of allRounds.filter((r) => !r.hidden)) {
+    for (const [label, count] of r.results) {
+      const pct = r.total ? Math.round((count / r.total) * 100) : 0;
+      if (!trendMap.has(label)) trendMap.set(label, []);
+      trendMap.get(label).push({ roundNumber: r.roundNumber, pct });
+    }
+  }
+  const trends = Array.from(trendMap.entries())
+    .filter(([, points]) => points.length >= 2)
+    .map(([label, points]) => {
+      points.sort((a, b) => a.roundNumber - b.roundNumber);
+      const first = points[0].pct;
+      const last = points[points.length - 1].pct;
+      return { label, points, change: last - first };
     })
-    .reverse();
+    .sort((a, b) => Math.abs(b.change) - Math.abs(a.change));
+
+  // Clientes recurrentes solo contando jugadas dentro de rondas visibles + jugadas sin ronda (sin encuesta)
+  const excludedQuestions = new Set(hiddenRounds);
+  const relevantHistory = fullHistory.filter((h) => {
+    const q = h.surveyQuestion || h.survey;
+    return !q || !excludedQuestions.has(q);
+  });
 
   const byPhone = new Map();
-  for (const h of fullHistory) {
+  for (const h of relevantHistory) {
     if (!h.phone) continue;
     if (!byPhone.has(h.phone)) {
       byPhone.set(h.phone, { phone: h.phone, name: h.name, count: 0, wins: 0, lastDate: h.date, firstDate: h.date });
@@ -429,12 +461,17 @@ function computeDashboard(fullHistory) {
     .filter((p) => p.count >= 2)
     .sort((a, b) => b.count - a.count);
 
+  const noPrizeStreaks = recurring.filter((p) => p.count >= 5 && p.wins === 0);
+
   return {
-    totalPlays: fullHistory.length,
+    totalPlays: relevantHistory.length,
     uniqueCustomers: byPhone.size,
-    totalWins: fullHistory.filter((h) => h.won).length,
-    rounds,
+    totalWins: relevantHistory.filter((h) => h.won).length,
+    rounds: visibleRounds,
+    hiddenRoundsList,
     recurring,
+    noPrizeStreaks,
+    trends,
   };
 }
 
@@ -477,18 +514,76 @@ function AdminPanel({ config, setConfig, history, onSave, onLogout, onResetPhone
   const [tab, setTab] = useState("general");
   const [resetPhone, setResetPhone] = useState("");
   const [resetMsg, setResetMsg] = useState("");
-  const [dashboard, setDashboard] = useState(null);
+  const [fullHistoryData, setFullHistoryData] = useState(null);
   const [dashboardLoading, setDashboardLoading] = useState(false);
+  const [showHiddenRounds, setShowHiddenRounds] = useState(false);
 
   useEffect(() => {
-    if (tab === "dashboard" && !dashboard && !dashboardLoading) {
+    if (tab === "dashboard" && fullHistoryData === null && !dashboardLoading) {
       setDashboardLoading(true);
       getFullHistory().then((full) => {
-        setDashboard(computeDashboard(full));
+        setFullHistoryData(full);
         setDashboardLoading(false);
       });
     }
-  }, [tab, dashboard, dashboardLoading]);
+  }, [tab, fullHistoryData, dashboardLoading]);
+
+  const dashboard = fullHistoryData ? computeDashboard(fullHistoryData, config.hiddenRounds || []) : null;
+
+  const toggleRoundVisibility = async (question) => {
+    const hidden = config.hiddenRounds || [];
+    const updated = hidden.includes(question) ? hidden.filter((q) => q !== question) : [...hidden, question];
+    const newConfig = { ...config, hiddenRounds: updated };
+    setConfig(newConfig);
+    await saveConfigRemote(newConfig);
+  };
+
+  const handleDeleteRound = async (round) => {
+    const ok = window.confirm(
+      `¿Eliminar PERMANENTEMENTE los datos de la ronda "${round.question}" (${round.total} jugadas)? Esto no se puede deshacer.`
+    );
+    if (!ok) return;
+    await deleteRoundHistory(round.question);
+    const hidden = (config.hiddenRounds || []).filter((q) => q !== round.question);
+    if (hidden.length !== (config.hiddenRounds || []).length) {
+      const newConfig = { ...config, hiddenRounds: hidden };
+      setConfig(newConfig);
+      await saveConfigRemote(newConfig);
+    }
+    setFullHistoryData(null);
+  };
+
+  const exportDashboardExcel = () => {
+    if (!dashboard) return;
+    const wb = XLSX.utils.book_new();
+
+    const roundsRows = [["Ronda", "Pregunta", "Desde", "Hasta", "Total votos", "Opción", "Votos", "Porcentaje", "Ganadora"]];
+    for (const r of dashboard.rounds) {
+      for (const [label, count] of r.results) {
+        const pct = r.total ? Math.round((count / r.total) * 100) : 0;
+        roundsRows.push([
+          r.roundNumber, r.question,
+          new Date(r.firstDate).toLocaleDateString(), new Date(r.lastDate).toLocaleDateString(),
+          r.total, label, count, `${pct}%`, label === r.winner ? "Sí" : "",
+        ]);
+      }
+    }
+    const wsRounds = XLSX.utils.aoa_to_sheet(roundsRows);
+    XLSX.utils.book_append_sheet(wb, wsRounds, "Rondas de encuesta");
+
+    const custRows = [["Nombre", "Teléfono", "Veces jugado", "Premios ganados", "Primera vez", "Última vez"]];
+    for (const p of dashboard.recurring) {
+      custRows.push([
+        p.name || "Sin nombre", p.phone, p.count, p.wins,
+        new Date(p.firstDate).toLocaleDateString(), new Date(p.lastDate).toLocaleDateString(),
+      ]);
+    }
+    const wsCust = XLSX.utils.aoa_to_sheet(custRows);
+    XLSX.utils.book_append_sheet(wb, wsCust, "Clientes recurrentes");
+
+    const dateTag = new Date().toISOString().slice(0, 10);
+    XLSX.writeFile(wb, `${config.businessName || "dashboard"}-${dateTag}.xlsx`);
+  };
 
   const updatePrize = (i, patch) => setConfig({ ...config, prizes: config.prizes.map((p, idx) => (idx === i ? { ...p, ...patch } : p)) });
   const addPrize = () => setConfig({ ...config, prizes: [...config.prizes, { isPrize: false, name: "La próxima, con suerte", emoji: "🍀" }] });
@@ -646,20 +741,58 @@ function AdminPanel({ config, setConfig, history, onSave, onLogout, onResetPhone
 
           {dashboard && (
             <>
-              <div className="flex gap-2 mb-5">
-                <div style={{ background: "#fff" }} className="flex-1 rounded-xl p-3 text-center">
-                  <p style={{ color: C.espressoDeep }} className="text-xl font-bold">{dashboard.totalPlays}</p>
-                  <p style={{ color: C.inkSoft }} className="text-[10px] uppercase font-bold">Jugadas totales</p>
-                </div>
-                <div style={{ background: "#fff" }} className="flex-1 rounded-xl p-3 text-center">
-                  <p style={{ color: C.espressoDeep }} className="text-xl font-bold">{dashboard.uniqueCustomers}</p>
-                  <p style={{ color: C.inkSoft }} className="text-[10px] uppercase font-bold">Clientes únicos</p>
-                </div>
-                <div style={{ background: "#fff" }} className="flex-1 rounded-xl p-3 text-center">
-                  <p style={{ color: C.mint }} className="text-xl font-bold">{dashboard.totalWins}</p>
-                  <p style={{ color: C.inkSoft }} className="text-[10px] uppercase font-bold">Premios entregados</p>
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex gap-2 flex-1">
+                  <div style={{ background: "#fff" }} className="flex-1 rounded-xl p-2.5 text-center">
+                    <p style={{ color: C.espressoDeep }} className="text-lg font-bold">{dashboard.totalPlays}</p>
+                    <p style={{ color: C.inkSoft }} className="text-[9px] uppercase font-bold">Jugadas</p>
+                  </div>
+                  <div style={{ background: "#fff" }} className="flex-1 rounded-xl p-2.5 text-center">
+                    <p style={{ color: C.espressoDeep }} className="text-lg font-bold">{dashboard.uniqueCustomers}</p>
+                    <p style={{ color: C.inkSoft }} className="text-[9px] uppercase font-bold">Clientes</p>
+                  </div>
+                  <div style={{ background: "#fff" }} className="flex-1 rounded-xl p-2.5 text-center">
+                    <p style={{ color: C.mint }} className="text-lg font-bold">{dashboard.totalWins}</p>
+                    <p style={{ color: C.inkSoft }} className="text-[9px] uppercase font-bold">Premios</p>
+                  </div>
                 </div>
               </div>
+
+              <button
+                onClick={exportDashboardExcel}
+                style={{ background: C.espresso, color: C.cream }}
+                className="w-full mb-6 py-2.5 rounded-xl font-bold text-sm flex items-center justify-center gap-2"
+              >
+                <Download size={15} /> Descargar Excel del dashboard
+              </button>
+
+              {dashboard.noPrizeStreaks.length > 0 && (
+                <div style={{ background: "#FFF4E5", borderColor: C.amberDeep }} className="rounded-xl p-3 mb-6 border">
+                  <div className="flex items-center gap-2 mb-2">
+                    <AlertTriangle size={16} color={C.clay} />
+                    <p style={{ color: C.espressoDeep }} className="text-sm font-bold">Candidatos a premio especial</p>
+                  </div>
+                  <p style={{ color: C.inkSoft }} className="text-xs mb-2">
+                    Jugaron 5 veces o más y nunca les ha tocado un premio real. Tú decides si vale la pena sorprenderlos.
+                  </p>
+                  <div className="flex flex-col gap-1.5">
+                    {dashboard.noPrizeStreaks.map((p) => (
+                      <div key={p.phone} className="flex items-center justify-between text-xs">
+                        <span style={{ color: C.ink }} className="font-semibold">{p.name || "Sin nombre"} · {p.phone}</span>
+                        <a
+                          href={waLinkFor(p)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          style={{ background: "#25D366" }}
+                          className="w-6 h-6 rounded-full flex items-center justify-center shrink-0"
+                        >
+                          <MessageCircle size={12} color="#0b1a10" />
+                        </a>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               <div className="flex items-center gap-2 mb-2">
                 <BarChart3 size={16} color={C.espressoDeep} />
@@ -678,9 +811,17 @@ function AdminPanel({ config, setConfig, history, onSave, onLogout, onResetPhone
                   <div key={r.roundNumber} style={{ background: "#fff" }} className="rounded-xl p-3">
                     <div className="flex items-center justify-between mb-1">
                       <p style={{ color: C.espressoDeep }} className="text-xs font-bold">Ronda {r.roundNumber}</p>
-                      <p style={{ color: C.inkSoft }} className="text-[10px]">
-                        {new Date(r.firstDate).toLocaleDateString()} – {new Date(r.lastDate).toLocaleDateString()} · {r.total} votos
-                      </p>
+                      <div className="flex items-center gap-2">
+                        <p style={{ color: C.inkSoft }} className="text-[10px]">
+                          {new Date(r.firstDate).toLocaleDateString()} – {new Date(r.lastDate).toLocaleDateString()} · {r.total} votos
+                        </p>
+                        <button onClick={() => toggleRoundVisibility(r.question)} title="Ocultar del dashboard">
+                          <EyeOff size={14} color={C.inkSoft} />
+                        </button>
+                        <button onClick={() => handleDeleteRound(r)} title="Eliminar permanentemente">
+                          <Trash2 size={14} color={C.clay} />
+                        </button>
+                      </div>
                     </div>
                     <p style={{ color: C.ink }} className="text-sm font-semibold mb-2">{r.question}</p>
                     <div className="flex flex-col gap-1.5">
@@ -705,6 +846,61 @@ function AdminPanel({ config, setConfig, history, onSave, onLogout, onResetPhone
                   </div>
                 ))}
               </div>
+
+              {dashboard.hiddenRoundsList.length > 0 && (
+                <div className="mb-6">
+                  <button
+                    onClick={() => setShowHiddenRounds((s) => !s)}
+                    style={{ color: C.inkSoft }}
+                    className="text-xs font-bold mb-2 flex items-center gap-1"
+                  >
+                    {showHiddenRounds ? "Ocultar" : "Ver"} rondas ocultas ({dashboard.hiddenRoundsList.length})
+                  </button>
+                  {showHiddenRounds && (
+                    <div className="flex flex-col gap-2">
+                      {dashboard.hiddenRoundsList.map((r) => (
+                        <div key={r.roundNumber} style={{ background: "#fff", opacity: 0.7 }} className="flex items-center justify-between p-2.5 rounded-xl text-xs">
+                          <span style={{ color: C.ink }} className="truncate max-w-[180px]">{r.question}</span>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <button onClick={() => toggleRoundVisibility(r.question)} title="Mostrar de nuevo">
+                              <Eye size={14} color={C.mint} />
+                            </button>
+                            <button onClick={() => handleDeleteRound(r)} title="Eliminar permanentemente">
+                              <Trash2 size={14} color={C.clay} />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {dashboard.trends.length > 0 && (
+                <>
+                  <div className="flex items-center gap-2 mb-2">
+                    <TrendingUp size={16} color={C.espressoDeep} />
+                    <p style={{ color: C.espressoDeep }} className="text-sm font-bold">Tendencias entre rondas</p>
+                  </div>
+                  <p style={{ color: C.inkSoft }} className="text-xs mb-3">
+                    Cómo cambió el interés en cada opción que se repitió en más de una ronda.
+                  </p>
+                  <div className="flex flex-col gap-2 mb-6">
+                    {dashboard.trends.map((t) => (
+                      <div key={t.label} style={{ background: "#fff" }} className="flex items-center justify-between p-2.5 rounded-xl text-xs">
+                        <span style={{ color: C.ink }} className="font-semibold truncate max-w-[140px]">{t.label}</span>
+                        <div className="flex items-center gap-1">
+                          {t.change > 0 && <TrendingUp size={14} color={C.mint} />}
+                          {t.change < 0 && <TrendingDown size={14} color={C.clay} />}
+                          <span style={{ color: t.change > 0 ? C.mint : t.change < 0 ? C.clay : C.inkSoft }} className="font-bold">
+                            {t.change > 0 ? "+" : ""}{t.change}%
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
 
               <div className="flex items-center gap-2 mb-2">
                 <Repeat size={16} color={C.espressoDeep} />

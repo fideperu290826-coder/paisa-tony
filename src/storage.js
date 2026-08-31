@@ -79,3 +79,16 @@ export async function addHistoryEntry(entry) {
   const { error } = await supabase.from("history").insert({ data: entry });
   if (error) console.error("addHistoryEntry error", error);
 }
+
+/* Elimina PERMANENTEMENTE todas las jugadas de una ronda de encuesta (por texto de pregunta) */
+export async function deleteRoundHistory(surveyQuestion) {
+  const { error } = await supabase
+    .from("history")
+    .delete()
+    .filter("data->>surveyQuestion", "eq", surveyQuestion);
+  if (error) {
+    console.error("deleteRoundHistory error", error);
+    return false;
+  }
+  return true;
+}
