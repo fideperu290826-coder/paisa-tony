@@ -9,9 +9,9 @@ export async function getConfig() {
     .maybeSingle();
   if (error) {
     console.error("getConfig error", error);
-    return null;
+    return { ok: false, data: null };
   }
-  return data ? data.data : null;
+  return { ok: true, data: data ? data.data : null };
 }
 
 export async function setConfig(config) {

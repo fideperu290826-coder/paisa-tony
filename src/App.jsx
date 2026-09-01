@@ -39,6 +39,9 @@ const DEFAULT_CONFIG = {
     { label: "Postre típico de la casa", emoji: "🍮" },
     { label: "Jugo natural nuevo sabor", emoji: "🥤" },
   ],
+  allowCustomAnswer: true,
+  customAnswerLabel: "Otro, cuéntanos tú",
+  customAnswerEmoji: "💬",
   prizes: [
     { isPrize: true, name: "Bandeja paisa a mitad de precio", emoji: "🍽️" },
     { isPrize: true, name: "Postre de la casa gratis", emoji: "🍮" },
@@ -221,13 +224,28 @@ function Terms({ config, onAccept }) {
 }
 
 function Survey({ config, onAnswer }) {
-  const [picked, setPicked] = useState(null);
+  const [picked, setPicked] = useState(null); // index number, or "custom"
+  const [customText, setCustomText] = useState("");
+  const allowCustom = config.allowCustomAnswer !== false; // default true
+  const customLabel = config.customAnswerLabel || "Otro, cuéntanos tú";
+  const customEmoji = config.customAnswerEmoji || "💬";
+
+  const canContinue = picked !== null && (picked !== "custom" || customText.trim().length > 0);
+
+  const handleContinue = () => {
+    if (picked === "custom") {
+      onAnswer(customText.trim());
+    } else {
+      onAnswer(config.surveyOptions[picked]?.label);
+    }
+  };
+
   return (
     <Screen>
       <Eyebrow>Paso 3 de 4</Eyebrow>
       <Sparkles size={32} color={C.amber} />
       <h2 style={{ color: C.cream }} className="text-2xl font-bold text-center mt-4 mb-6">{config.surveyQuestion}</h2>
-      <div className="w-full flex flex-col gap-3 mb-6">
+      <div className="w-full flex flex-col gap-3 mb-3">
         {config.surveyOptions.map((opt, i) => (
           <button key={i} onClick={() => setPicked(i)}
             style={{ background: picked === i ? C.amber : C.cream, color: C.espressoDeep, borderColor: picked === i ? C.amberDeep : "transparent" }}
@@ -236,8 +254,27 @@ function Survey({ config, onAnswer }) {
             <span>{opt.label}</span>
           </button>
         ))}
+        {allowCustom && (
+          <button onClick={() => setPicked("custom")}
+            style={{ background: picked === "custom" ? C.amber : C.cream, color: C.espressoDeep, borderColor: picked === "custom" ? C.amberDeep : "transparent" }}
+            className="w-full py-4 rounded-2xl font-semibold flex items-center gap-3 px-4 border-2 transition-colors">
+            <span className="text-2xl">{customEmoji}</span>
+            <span>{customLabel}</span>
+          </button>
+        )}
       </div>
-      <PrimaryButton disabled={picked === null} onClick={() => onAnswer(config.surveyOptions[picked]?.label)}>
+      {picked === "custom" && (
+        <textarea
+          value={customText}
+          onChange={(e) => setCustomText(e.target.value.slice(0, 200))}
+          placeholder="Escribe aquí tu idea..."
+          rows={3}
+          autoFocus
+          style={{ background: C.cream, color: C.ink }}
+          className="w-full rounded-2xl p-3 mb-3 outline-none resize-none text-sm"
+        />
+      )}
+      <PrimaryButton disabled={!canContinue} onClick={handleContinue}>
         Jugar ahora <ArrowRight size={18} />
       </PrimaryButton>
     </Screen>
@@ -701,6 +738,36 @@ function AdminPanel({ config, setConfig, history, onSave, onLogout, onResetPhone
           >
             <Plus size={16} /> Agregar opción
           </button>
+
+          <div style={{ background: "#fff" }} className="rounded-xl p-3 mt-5">
+            <label className="flex items-center gap-2 mb-3 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={config.allowCustomAnswer !== false}
+                onChange={(e) => setConfig({ ...config, allowCustomAnswer: e.target.checked })}
+              />
+              <span style={{ color: C.espressoDeep }} className="text-sm font-bold">
+                Dejar que el cliente escriba su propia respuesta
+              </span>
+            </label>
+            {config.allowCustomAnswer !== false && (
+              <div className="flex gap-2">
+                <input
+                  value={config.customAnswerEmoji || "💬"}
+                  onChange={(e) => setConfig({ ...config, customAnswerEmoji: e.target.value })}
+                  style={inputStyle}
+                  className="w-14 py-2.5 text-center rounded-xl outline-none"
+                />
+                <input
+                  value={config.customAnswerLabel || ""}
+                  onChange={(e) => setConfig({ ...config, customAnswerLabel: e.target.value })}
+                  placeholder="Otro, cuéntanos tú"
+                  style={inputStyle}
+                  className="flex-1 py-2.5 px-3 rounded-xl outline-none"
+                />
+              </div>
+            )}
+          </div>
         </div>
       )}
 
@@ -995,6 +1062,7 @@ export default function App() {
   const [route, setRoute] = useState("landing");
   const [config, setConfig] = useState(DEFAULT_CONFIG);
   const [loaded, setLoaded] = useState(false);
+  const [configError, setConfigError] = useState(false);
   const [phone, setPhone] = useState("");
   const [customerName, setCustomerName] = useState("");
   const [lastPlayISO, setLastPlayISO] = useState(null);
@@ -1005,10 +1073,18 @@ export default function App() {
   const [saving, setSaving] = useState(false);
 
   const loadConfig = useCallback(async () => {
-    const remote = await getConfig();
-    if (remote) {
-      setConfig(remote);
+    setConfigError(false);
+    const result = await getConfig();
+    if (!result.ok) {
+      // Falla de red/servidor: NUNCA sobrescribimos nada remoto. Mostramos pantalla de reintento.
+      setConfigError(true);
+      setLoaded(true);
+      return;
+    }
+    if (result.data) {
+      setConfig(result.data);
     } else {
+      // Esta es la PRIMERA vez que se usa este negocio (la fila realmente no existe todavía).
       setConfig(DEFAULT_CONFIG);
       await saveConfigRemote(DEFAULT_CONFIG);
     }
@@ -1067,6 +1143,19 @@ export default function App() {
     return (
       <div style={{ background: C.espresso, minHeight: "620px" }} className="w-full max-w-md mx-auto rounded-3xl flex items-center justify-center">
         <UtensilsCrossed size={30} color={C.amber} className="animate-pulse" />
+      </div>
+    );
+  }
+
+  if (configError) {
+    return (
+      <div style={{ background: C.espresso, minHeight: "620px" }} className="w-full max-w-md mx-auto rounded-3xl flex flex-col items-center justify-center p-8 text-center">
+        <Clock size={34} color={C.amber} />
+        <p style={{ color: C.cream }} className="text-lg font-bold mt-4 mb-2">No pudimos conectar</p>
+        <p style={{ color: `${C.cream}99` }} className="text-sm mb-6">
+          Hubo un problema al cargar la configuración. No se modificó nada — solo revisa tu conexión e inténtalo de nuevo.
+        </p>
+        <PrimaryButton onClick={loadConfig}>Reintentar</PrimaryButton>
       </div>
     );
   }
