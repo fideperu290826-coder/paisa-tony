@@ -80,14 +80,24 @@ export async function addHistoryEntry(entry) {
   if (error) console.error("addHistoryEntry error", error);
 }
 
-/* Elimina PERMANENTEMENTE todas las jugadas de una ronda de encuesta (por texto de pregunta) */
+/* Elimina PERMANENTEMENTE todas las jugadas de una ronda de encuesta (por texto de pregunta).
+   Busca los IDs exactos en el cliente y borra por ID, para no depender de un filtro
+   de ruta JSON en Supabase que puede fallar en silencio con ciertos textos. */
 export async function deleteRoundHistory(surveyQuestion) {
-  const { error } = await supabase
-    .from("history")
-    .delete()
-    .filter("data->>surveyQuestion", "eq", surveyQuestion);
+  const { data, error } = await supabase.from("history").select("id, data").limit(5000);
   if (error) {
-    console.error("deleteRoundHistory error", error);
+    console.error("deleteRoundHistory (fetch) error", error);
+    return false;
+  }
+  const idsToDelete = (data || [])
+    .filter((row) => (row.data?.surveyQuestion || row.data?.survey) === surveyQuestion)
+    .map((row) => row.id);
+
+  if (idsToDelete.length === 0) return true;
+
+  const { error: delError } = await supabase.from("history").delete().in("id", idsToDelete);
+  if (delError) {
+    console.error("deleteRoundHistory (delete) error", delError);
     return false;
   }
   return true;

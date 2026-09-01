@@ -543,7 +543,11 @@ function AdminPanel({ config, setConfig, history, onSave, onLogout, onResetPhone
       `¿Eliminar PERMANENTEMENTE los datos de la ronda "${round.question}" (${round.total} jugadas)? Esto no se puede deshacer.`
     );
     if (!ok) return;
-    await deleteRoundHistory(round.question);
+    const success = await deleteRoundHistory(round.question);
+    if (!success) {
+      window.alert("No se pudo eliminar la ronda. Revisa tu conexión e inténtalo de nuevo.");
+      return;
+    }
     const hidden = (config.hiddenRounds || []).filter((q) => q !== round.question);
     if (hidden.length !== (config.hiddenRounds || []).length) {
       const newConfig = { ...config, hiddenRounds: hidden };
