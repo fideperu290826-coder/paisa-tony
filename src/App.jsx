@@ -55,6 +55,7 @@ const DEFAULT_CONFIG = {
     { isPrize: false, name: "La próxima, con suerte", emoji: "🍀" },
   ],
   adminPassword: "1234",
+  businessWhatsappNumber: "",
   whatsappCommunityLink: "",
   whatsappCommunityPerks: [
     "Ve el menú del día antes que nadie",
@@ -376,8 +377,14 @@ function Game({ onFinish, prizes }) {
   );
 }
 
-function Result({ prize, onDone, communityLink, perks = [] }) {
+function Result({ prize, onDone, communityLink, perks = [], businessWhatsappNumber, customerName, phone }) {
   const won = prize?.isPrize;
+  const needsConfirmation = won && !!businessWhatsappNumber;
+  const [confirmed, setConfirmed] = useState(!needsConfirmation);
+
+  const confirmMsg = `¡Hola! Gané: ${prize?.name} 🎉 Mi nombre es ${customerName}, mi celular es ${phone}.`;
+  const confirmLink = `https://wa.me/51${businessWhatsappNumber}?text=${encodeURIComponent(confirmMsg)}`;
+
   return (
     <Screen>
       <div style={{ background: won ? C.mint : C.creamSoft, width: 90, height: 90 }} className="rounded-full flex items-center justify-center text-5xl mb-6">
@@ -385,9 +392,33 @@ function Result({ prize, onDone, communityLink, perks = [] }) {
       </div>
       <h2 style={{ color: C.cream }} className="text-2xl font-bold text-center mb-2">{won ? "¡Ganaste!" : "¡Casi!"}</h2>
       <p style={{ color: won ? C.mint : `${C.cream}bb` }} className="text-lg font-semibold text-center mb-6">{prize?.name}</p>
-      {won && <p style={{ color: `${C.cream}99` }} className="text-xs text-center mb-6">Muestra esta pantalla en el mostrador para reclamarlo</p>}
 
-      {communityLink && (
+      {needsConfirmation && !confirmed && (
+        <div style={{ background: C.cream }} className="w-full rounded-2xl p-4 mb-6">
+          <p style={{ color: C.espressoDeep }} className="text-sm font-bold text-center mb-3">
+            Un paso más para reclamarlo 👇
+          </p>
+          <p style={{ color: C.inkSoft }} className="text-xs text-center mb-4">
+            Confirma tu premio por WhatsApp y te mostramos el comprobante para el mostrador.
+          </p>
+          <a
+            href={confirmLink}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={() => setConfirmed(true)}
+            style={{ background: "#25D366", color: "#0b1a10" }}
+            className="w-full py-3.5 rounded-2xl font-bold flex items-center justify-center gap-2"
+          >
+            <MessageCircle size={18} /> Confirmar por WhatsApp
+          </a>
+        </div>
+      )}
+
+      {won && confirmed && (
+        <p style={{ color: `${C.cream}99` }} className="text-xs text-center mb-6">Muestra esta pantalla en el mostrador para reclamarlo</p>
+      )}
+
+      {communityLink && confirmed && (
         <div style={{ background: C.cream }} className="w-full rounded-2xl p-4 mb-3">
           <p style={{ color: C.espressoDeep }} className="text-sm font-bold text-center mb-3">
             🔥 Únete a nuestra comunidad y desbloquea:
@@ -403,7 +434,7 @@ function Result({ prize, onDone, communityLink, perks = [] }) {
         </div>
       )}
 
-      {communityLink && (
+      {communityLink && confirmed && (
         <a
           href={communityLink}
           target="_blank"
@@ -680,6 +711,19 @@ function AdminPanel({ config, setConfig, history, onSave, onLogout, onResetPhone
           </Field>
           <Field label="Contraseña de administrador">
             <input value={config.adminPassword} onChange={(e) => setConfig({ ...config, adminPassword: e.target.value })} style={inputStyle} className="w-full py-2.5 px-3 rounded-xl outline-none" />
+          </Field>
+          <Field label="Tu número de WhatsApp del negocio (para confirmar premios)">
+            <input
+              value={config.businessWhatsappNumber}
+              onChange={(e) => setConfig({ ...config, businessWhatsappNumber: cleanPhone(e.target.value).slice(0, 9) })}
+              placeholder="987654321"
+              style={inputStyle}
+              className="w-full py-2.5 px-3 rounded-xl outline-none"
+            />
+            <p style={{ color: C.inkSoft }} className="text-xs mt-1">
+              Si lo dejas vacío, no se pide confirmación por WhatsApp antes de reclamar un premio.
+              Si lo pones, el cliente debe enviarte un WhatsApp con su premio antes de ver el comprobante.
+            </p>
           </Field>
           <Field label="Link de tu comunidad de WhatsApp (opcional)">
             <input value={config.whatsappCommunityLink} onChange={(e) => setConfig({ ...config, whatsappCommunityLink: e.target.value })} placeholder="https://chat.whatsapp.com/xxxxxxxx" style={inputStyle} className="w-full py-2.5 px-3 rounded-xl outline-none" />
@@ -1168,7 +1212,17 @@ export default function App() {
       {route === "terms" && <Terms config={config} onAccept={() => setRoute("survey")} />}
       {route === "survey" && <Survey config={config} onAnswer={(ans) => { setSurveyAnswer(ans); setRoute("game"); }} />}
       {route === "game" && <Game onFinish={finishGame} prizes={config.prizes} />}
-      {route === "result" && <Result prize={prizeResult} onDone={resetAll} communityLink={config.whatsappCommunityLink} perks={config.whatsappCommunityPerks} />}
+      {route === "result" && (
+        <Result
+          prize={prizeResult}
+          onDone={resetAll}
+          communityLink={config.whatsappCommunityLink}
+          perks={config.whatsappCommunityPerks}
+          businessWhatsappNumber={config.businessWhatsappNumber}
+          customerName={customerName}
+          phone={phone}
+        />
+      )}
       {route === "adminLogin" && <AdminLogin config={config} onOk={() => { loadHistory(); setRoute("admin"); }} onBack={() => setRoute("landing")} />}
       {route === "admin" && (
         <AdminPanel config={config} setConfig={setConfig} history={history} saving={saving}
